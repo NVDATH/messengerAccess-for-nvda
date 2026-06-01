@@ -45,7 +45,7 @@ jobs:
           cat changelog.md >> readme.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2 # แก้ไข: ลิงก์ออก
+        uses: softprops/action-gh-release@v2
         with:
           body_path: release_notes.md
           files: |
