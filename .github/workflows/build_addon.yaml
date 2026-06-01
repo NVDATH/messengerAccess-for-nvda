@@ -34,11 +34,11 @@ jobs:
           if [ -f "changelog.md" ]; then
             sed -n "/^## $VERSION/,/^## /p" changelog.md | sed '1d;$d' > release_notes.md
           fi
-          if [ ! -s release_notes.md ]; then 
+          if [ ! -s release_notes.md ]; then
             echo "Release for version $VERSION" > release_notes.md
           fi
 
-        - name: Append Changelog to Readme
+      - name: Append Changelog to Readme
         run: |
           echo "" >> readme.md
           echo "## Changelog" >> readme.md
