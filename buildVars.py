@@ -26,7 +26,7 @@ pythonSources = [
 
 i18nSources = [
     "buildVars.py",
-    "addon/globalPlugins/messengerAccess.py",
+    "addon/globalPlugins/MessengerAccess.py",
 ]
 
 docFiles = ["readme.html"]
