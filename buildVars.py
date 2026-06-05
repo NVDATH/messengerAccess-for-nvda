@@ -12,7 +12,7 @@ addon_info = {
     "addon_summary": _("messengerAccess"),
     # Translators: Long description to be shown for this add-on on add-on information from add-ons manager
     "addon_description": _("""Provides accessibility features for Messenger chat onFirefox and Chrome and Microsoft Edge."""),
-    "addon_author": "NVDA_TH <nvdainth@gmail.com>, assisted by A.I.",
+    "addon_author": "NVDATH <nvdainth@gmail.com> assis by A.I.",
     "addon_url": "https://github.com/NVDATH/messengerAccess-for-nvda",
     "addon_docFileName": "readme.html",
     "addon_minimumNVDAVersion": "2025.1",

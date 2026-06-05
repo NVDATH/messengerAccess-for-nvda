@@ -168,7 +168,7 @@ _TM_FIREFOX_URL = "https://addons.mozilla.org/firefox/addon/tampermonkey/"
 _TM_CHROME_URL  = "https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"
 
 class MessengerAccessPanel(SettingsPanel):
-    title = "Messenger Accessibility"
+    title = "Messenger Access"
 
     def makeSettings(self, sizer):
         cfg = import_config()
