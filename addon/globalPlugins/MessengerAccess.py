@@ -139,13 +139,19 @@ def _start_watchdog():
     threading.Thread(target=_watchdog, daemon=True).start()
 
 def import_config():
-    """อ่าน config จาก NVDA config store — fallback เป็น default ถ้ายังไม่มีค่า"""
     try:
         import config
-        return config.conf.get("messengerAccess", {})
+        raw = config.conf.get("messengerAccess", {})
+        result = {}
+        for k, v in raw.items():
+            if isinstance(v, str):
+                result[k] = v.lower() == "true"
+            else:
+                result[k] = v
+        return result
     except Exception:
         return {}
-
+        
 def save_config(key, value):
     try:
         import config

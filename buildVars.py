@@ -7,7 +7,7 @@ def _(x):
 # Add-on information variables
 addon_info = {
     "addon_name": "messengerAccess",
-    "addon_version": "2026.6.1",
+    "addon_version": "2026.6.5",
 # Translators: Summary for this add-on
     "addon_summary": _("messengerAccess"),
     # Translators: Long description to be shown for this add-on on add-on information from add-ons manager
