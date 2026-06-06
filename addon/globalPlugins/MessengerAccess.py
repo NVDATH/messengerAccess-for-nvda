@@ -86,7 +86,11 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
             if old_chat != key or old_messages != messages:
                 if import_config().get(_CONF_AUTOJUMP, False):
-                    CURRENT_INDEX[0] = max(0, len(CHAT_DATA[key]) - 1)
+                    #CURRENT_INDEX[0] = max(0, len(CHAT_DATA[key]) - 1)
+                    CURRENT_INDEX[0] = min(
+                        max(0, len(CHAT_DATA[key]) - 1),
+                        len(CHAT_DATA[key]) - 1 if CHAT_DATA[key] else 0
+                    )
                 if old_chat != key:
                     log.debug(f"[Messenger Bridge] Snapped to: '{key}'")
                 else:
@@ -268,6 +272,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if not key or key not in CHAT_DATA or len(CHAT_DATA[key]) == 0:
             ui.message("No chat messages")
             return
+        CURRENT_INDEX[0] = min(CURRENT_INDEX[0], len(CHAT_DATA[key]) - 1)
         if CURRENT_INDEX[0] > 0:
             CURRENT_INDEX[0] -= 1
             ui.message(CHAT_DATA[key][CURRENT_INDEX[0]])
@@ -287,6 +292,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if not key or key not in CHAT_DATA or len(CHAT_DATA[key]) == 0:
             ui.message("No chat messages")
             return
+        CURRENT_INDEX[0] = min(CURRENT_INDEX[0], len(CHAT_DATA[key]) - 1)
         if CURRENT_INDEX[0] < len(CHAT_DATA[key]) - 1:
             CURRENT_INDEX[0] += 1
             ui.message(CHAT_DATA[key][CURRENT_INDEX[0]])
