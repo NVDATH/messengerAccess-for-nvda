@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Messenger Bridge for NVDA (Universal)
 // @namespace    http://tampermonkey.net/
-// @version      3.5
+// @version      3.7.2
 // @author        Claud.ai, Gemini
 // @description  Universal Messenger Bridge — works with Chrome, Edge, Firefox. Single port 48320. Renders a clean accessible English mirror on the page.
 // @updateURL   http://localhost:48320/universal.user.js
@@ -30,6 +30,54 @@
     let isFetching = false;
     let lastSuccessfulFingerprint = "";
     let lastSyncTime = 0;
+    let isNavigating = false;
+    let lastCommandId = "";
+
+    function getChatId() {
+        // Pattern: /t/<chat_id> or /messages/t/<chat_id>
+        const match = location.pathname.match(/\/t\/([^/?#]+)/);
+        return match ? match[1] : null;
+    }
+
+    function navigateToChat(chatId) {
+        if (isNavigating) return;
+        const target = `https://www.messenger.com/t/${chatId}`;
+        if (location.href === target) return;
+        isNavigating = true;
+        // Messenger is a SPA — location.href may not trigger full reload.
+        // Use location.assign to force a real navigation, then reset the guard
+        // via a fallback timeout in case the page does NOT fully reload (rare).
+        location.assign(target);
+        // If SPA intercepts the navigation and doesn't reload, reset guard after 4s
+        // so polling can resume normally.
+        setTimeout(() => { isNavigating = false; }, 4000);
+    }
+
+    function pollCommand() {
+        if (isNavigating) return;
+        GM_xmlhttpRequest({
+            method:  "GET",
+            url:     `http://127.0.0.1:${PORT}/command`,
+            timeout: 3000,
+            onload: function(response) {
+                if (response.status === 200) {
+                    try {
+                        const data = JSON.parse(response.responseText);
+                        // Only act if it's a new command we haven't processed yet
+                        if (data.command === "navigate" && data.chat_id && data.id !== lastCommandId) {
+                            lastCommandId = data.id;
+                            navigateToChat(data.chat_id);
+                        } else if (data.command === "open_update" && data.id !== lastCommandId) {
+                            lastCommandId = data.id;
+                            window.open(`http://127.0.0.1:${PORT}/universal.user.js`, '_blank');
+                        }
+                    } catch (e) {}
+                }
+            },
+            onerror:   function() {},
+            ontimeout: function() {}
+        });
+    }
 
     function pushToNVDA(chatTitle, messagesArray, currentFingerprint) {
         if (isFetching) return;
@@ -37,7 +85,9 @@
 
         const payload = {
             browser:  BROWSER,
+            version:  "3.7.2",
             title:    chatTitle,
+            chat_id:  getChatId(),
             messages: messagesArray
         };
 
@@ -68,7 +118,7 @@
     }
 
     function processChatMirror() {
-        if (isUpdating) return;
+        if (isUpdating || isNavigating) return;
         isUpdating = true;
 
         // ── ลอจิก Tab Mutex: ป้องกันการแย่งพอร์ตในกรณีเปิดหลายแท็บพร้อมกัน ──
@@ -251,6 +301,7 @@
     observer.observe(document.body, { childList: true, subtree: true });
 
     setInterval(processChatMirror, 3000);
+    setInterval(pollCommand, 2000);
     processChatMirror();
 
 })();

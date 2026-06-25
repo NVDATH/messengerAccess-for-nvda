@@ -5,6 +5,7 @@ import threading
 import json
 import socket
 import time
+import uuid
 import globalPluginHandler
 import os
 import gui
@@ -19,15 +20,35 @@ from scriptHandler import script
 
 CHAT_DATA     = {}
 CHAT_TITLES   = []
+CHAT_IDS      = {}   # key -> chat_id
 CURRENT_CHAT  = [None]
 CURRENT_INDEX = [0]
-_SERVER_INSTANCE = None
-_UNIFIED_PORT    = 48320
-_last_sync_time  = 0.0
+_SERVER_INSTANCE  = None
+_UNIFIED_PORT     = 48320
+_last_sync_time   = 0.0
+_pending_command  = [None]   # {"id": str, "command": "navigate", "chat_id": str} | None
 
 # config keys
-_CONF_BEEP     = "messengerBeepEnabled"
-_CONF_AUTOJUMP = "messengerAutoJump"
+_CONF_BEEP       = "messengerBeepEnabled"
+_CONF_AUTOJUMP   = "messengerAutoJump"
+_CONF_NAVSWITCH  = "messengerNavSwitch"
+
+# version check — อ่านจาก .js จริงเพื่อไม่ต้อง hardcode
+def _read_script_version():
+    try:
+        js_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'universal.user.js')
+        with open(js_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('// @version'):
+                    return line.split('// @version', 1)[1].strip()
+    except Exception as e:
+        log.error(f"[Messenger Bridge] Could not read script version: {e}")
+    return None
+
+_REQUIRED_SCRIPT_VERSION = _read_script_version()
+_script_version_warned   = [False]
+_detected_script_version = [None]
 
 
 class _ReusableHTTPServer(HTTPServer):
@@ -50,12 +71,26 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             filepath = os.path.join(addon_dir, self.path.lstrip('/'))
             if os.path.exists(filepath):
                 self.send_response(200)
-                self.send_header('Content-Type', 'text/javascript; charset=utf-8')
+                self.send_header('Content-Type', 'application/x-userscript; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 with open(filepath, 'rb') as f:
                     self.wfile.write(f.read())
                 return
+
+        if self.path == '/command':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            cmd = _pending_command[0]
+            if cmd:
+                self.wfile.write(json.dumps(cmd).encode('utf-8'))
+                _pending_command[0] = None   # consume-once: clear after serving
+            else:
+                self.wfile.write(b'{}')
+            return
+
         self.send_error(404, "Not Found")
 
     def do_POST(self):
@@ -68,12 +103,33 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             data     = json.loads(post_data.decode('utf-8'))
             browser  = data.get('browser', 'unknown')
             title    = data.get('title', 'Unknown Chat')
+            chat_id  = data.get('chat_id')
             messages = data.get('messages', [])
+            script_version = data.get('version', None)
+            log.debug(f"[Messenger Bridge] version received: {script_version!r}, required: {_REQUIRED_SCRIPT_VERSION!r}")
             key      = f"{browser}::{title}"
+
+            # version check — แจ้งเตือนและสั่ง open update ครั้งเดียวต่อ session
+            if script_version:
+                _detected_script_version[0] = script_version
+                if (not _script_version_warned[0]
+                        and script_version != _REQUIRED_SCRIPT_VERSION):
+                    _script_version_warned[0] = True
+                    _pending_command[0] = {
+                        "id":      str(uuid.uuid4()),
+                        "command": "open_update"
+                    }
+                    wx.CallAfter(
+                        ui.message,
+                        f"UserScript is outdated. Opening update page in your browser."
+                    )
 
             if key not in CHAT_DATA:
                 CHAT_DATA[key] = deque(maxlen=100)
                 CHAT_TITLES.append(key)
+
+            if chat_id:
+                CHAT_IDS[key] = chat_id
 
             old_messages = list(CHAT_DATA[key])
             if old_messages != messages:
@@ -86,16 +142,17 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
             if old_chat != key or old_messages != messages:
                 if import_config().get(_CONF_AUTOJUMP, False):
-                    #CURRENT_INDEX[0] = max(0, len(CHAT_DATA[key]) - 1)
                     CURRENT_INDEX[0] = min(
                         max(0, len(CHAT_DATA[key]) - 1),
                         len(CHAT_DATA[key]) - 1 if CHAT_DATA[key] else 0
                     )
                 if old_chat != key:
+                    CURRENT_INDEX[0] = max(0, len(CHAT_DATA[key]) - 1)
                     log.debug(f"[Messenger Bridge] Snapped to: '{key}'")
                 else:
+                    if import_config().get(_CONF_AUTOJUMP, False):
+                        CURRENT_INDEX[0] = max(0, len(CHAT_DATA[key]) - 1)
                     log.debug(f"[Messenger Bridge] New message in: '{key}'")
-
             global _last_sync_time
             _last_sync_time = time.time()
 
@@ -177,44 +234,98 @@ class MessengerAccessPanel(SettingsPanel):
     def makeSettings(self, sizer):
         cfg = import_config()
 
-        # UserScript section
-        scriptBox = wx.StaticBoxSizer(wx.VERTICAL, self, "Install UserScript")
-        desc = wx.StaticText(
-            self, wx.ID_ANY,
-            "Click \"Install UserScript\" to open the script in your default browser.\n"
-            "If you want to install it in a different browser, use \"Copy Script URL\" "
-            "and paste it into that browser's address bar manually."
-        )
-        desc.Wrap(440)
-        scriptBox.Add(desc, 0, wx.ALL, 6)
-        btnRow = wx.BoxSizer(wx.HORIZONTAL)
-        self.btnScript = wx.Button(self, wx.ID_ANY, "Install UserScript")
-        self.btnCopy   = wx.Button(self, wx.ID_ANY, "Copy Script URL")
-        btnRow.Add(self.btnScript, 0, wx.RIGHT, 8)
-        btnRow.Add(self.btnCopy, 0)
-        scriptBox.Add(btnRow, 0, wx.ALL, 6)
-        sizer.Add(scriptBox, 0, wx.ALL | wx.EXPAND, 8)
-
-        self.btnScript.Bind(wx.EVT_BUTTON, self.onInstallScript)
-        self.btnCopy.Bind(wx.EVT_BUTTON, self.onCopyLink)
-
-        # Behavior section
+        # ── 1. Behavior (ใช้บ่อย — ขึ้นก่อน) ──────────────────────────────
         behaviorBox = wx.StaticBoxSizer(wx.VERTICAL, self, "Behavior")
-        self.chkBeep = wx.CheckBox(
-            self, wx.ID_ANY,
-            "Play beep sound at the end of message list"
-        )
+
+        self.chkBeep = wx.CheckBox(self, wx.ID_ANY,
+            "Play beep sound at end of message list")
         self.chkBeep.SetValue(cfg.get(_CONF_BEEP, False))
         behaviorBox.Add(self.chkBeep, 0, wx.ALL, 6)
 
-        self.chkAutoJump = wx.CheckBox(
-            self, wx.ID_ANY,
-            "Always move to latest message when new message arrives"
-        )
+        self.chkAutoJump = wx.CheckBox(self, wx.ID_ANY,
+            "Auto-jump to latest message when new message arrives")
         self.chkAutoJump.SetValue(cfg.get(_CONF_AUTOJUMP, False))
         behaviorBox.Add(self.chkAutoJump, 0, wx.ALL, 6)
 
+        self.chkNavSwitch = wx.CheckBox(self, wx.ID_ANY,
+            "Auto-switch chat: navigate browser when changing chats")
+        self.chkNavSwitch.SetValue(cfg.get(_CONF_NAVSWITCH, False))
+        behaviorBox.Add(self.chkNavSwitch, 0, wx.ALL, 6)
+
         sizer.Add(behaviorBox, 0, wx.ALL | wx.EXPAND, 8)
+
+        # ── 2. UserScript — status + update ────────────────────────────────
+        scriptBox = wx.StaticBoxSizer(wx.VERTICAL, self, "UserScript")
+
+        detected  = _detected_script_version[0]
+        if detected is None:
+            status_text = "Status: not detected (open Messenger in your browser)"
+        elif detected == _REQUIRED_SCRIPT_VERSION:
+            status_text = f"Status: up to date (version {detected})"
+        else:
+            status_text = (f"Status: update available "
+                           f"(installed {detected}, required {_REQUIRED_SCRIPT_VERSION})")
+
+        self.lblStatus = wx.StaticText(self, wx.ID_ANY, status_text)
+        scriptBox.Add(self.lblStatus, 0, wx.ALL, 6)
+
+        updateRow = wx.BoxSizer(wx.HORIZONTAL)
+        self.btnCheck = wx.Button(self, wx.ID_ANY, "Check for Update")
+        self.btnCopy  = wx.Button(self, wx.ID_ANY, "Copy Script URL")
+        updateRow.Add(self.btnCheck, 0, wx.RIGHT, 8)
+        updateRow.Add(self.btnCopy, 0)
+        scriptBox.Add(updateRow, 0, wx.ALL, 6)
+
+        sizer.Add(scriptBox, 0, wx.ALL | wx.EXPAND, 8)
+
+        self.btnCheck.Bind(wx.EVT_BUTTON, self.onCheckUpdate)
+        self.btnCopy.Bind(wx.EVT_BUTTON,  self.onCopyLink)
+
+        # ── 3. Advanced — ใช้ตอน setup ครั้งแรกเท่านั้น ───────────────────
+        advBox = wx.StaticBoxSizer(wx.VERTICAL, self, "Advanced")
+
+        advDesc = wx.StaticText(self, wx.ID_ANY,
+            "Use \"Install UserScript\" only during initial setup.\n"
+            "This opens the script URL in your default browser for Tampermonkey to install.")
+        advDesc.Wrap(440)
+        advBox.Add(advDesc, 0, wx.ALL, 6)
+
+        self.btnScript = wx.Button(self, wx.ID_ANY, "Install UserScript")
+        advBox.Add(self.btnScript, 0, wx.ALL, 6)
+
+        sizer.Add(advBox, 0, wx.ALL | wx.EXPAND, 8)
+
+        self.btnScript.Bind(wx.EVT_BUTTON, self.onInstallScript)
+
+    def onCheckUpdate(self, event):
+        detected = _detected_script_version[0]
+        if detected is None:
+            wx.MessageBox(
+                "UserScript version not detected.\n"
+                "Make sure Messenger is open in your browser and the script is running.",
+                "Check for Update",
+                wx.OK | wx.ICON_INFORMATION
+            )
+            return
+        if detected == _REQUIRED_SCRIPT_VERSION:
+            wx.MessageBox(
+                f"UserScript is up to date (version {detected}).",
+                "Check for Update",
+                wx.OK | wx.ICON_INFORMATION
+            )
+        else:
+            if wx.TheClipboard.Open():
+                wx.TheClipboard.SetData(wx.TextDataObject(_SCRIPT_URL))
+                wx.TheClipboard.Close()
+            wx.MessageBox(
+                f"Update available: installed {detected}, required {_REQUIRED_SCRIPT_VERSION}.\n\n"
+                "The update URL has been copied to your clipboard.\n"
+                "Paste it into your browser's address bar to update the script via Tampermonkey.",
+                "Update Available",
+                wx.OK | wx.ICON_WARNING
+            )
+            # reset warned flag so user gets notified again next session if still outdated
+            _script_version_warned[0] = False
 
     def onInstallScript(self, event):
         try:
@@ -226,10 +337,17 @@ class MessengerAccessPanel(SettingsPanel):
         if wx.TheClipboard.Open():
             wx.TheClipboard.SetData(wx.TextDataObject(_SCRIPT_URL))
             wx.TheClipboard.Close()
+        wx.MessageBox(
+            "Script URL copied to clipboard.\n"
+            "Paste it into your browser's address bar to install or update via Tampermonkey.",
+            "URL Copied",
+            wx.OK | wx.ICON_INFORMATION
+        )
 
     def onSave(self):
-        save_config(_CONF_BEEP,     self.chkBeep.GetValue())
-        save_config(_CONF_AUTOJUMP, self.chkAutoJump.GetValue())
+        save_config(_CONF_BEEP,      self.chkBeep.GetValue())
+        save_config(_CONF_AUTOJUMP,  self.chkAutoJump.GetValue())
+        save_config(_CONF_NAVSWITCH, self.chkNavSwitch.GetValue())
 
     def onDiscard(self): pass
 
@@ -301,10 +419,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                 tones.beep(720, 70)
             ui.message(CHAT_DATA[key][CURRENT_INDEX[0]])
 
-    @script(  
-        # Translators: Message to be announced during Keyboard Help  
+    def _switch_chat(self, idx):
+        CURRENT_CHAT[0] = CHAT_TITLES[idx]
+        CURRENT_INDEX[0] = max(0, len(CHAT_DATA[CURRENT_CHAT[0]]) - 1)
+        display = CURRENT_CHAT[0].split('::', 1)[-1]
+        ui.message(f"active chat: {display}")
+        if import_config().get(_CONF_NAVSWITCH, False):
+            chat_id = CHAT_IDS.get(CURRENT_CHAT[0])
+            if chat_id:
+                _pending_command[0] = {
+                    "id":      str(uuid.uuid4()),
+                    "command": "navigate",
+                    "chat_id": chat_id
+                }
+
+    @script(
         description=_("move to read previous convasation"),
-        # Translators: Name of the section in "Input gestures" dialog.  
         category="messengerAccess")
     def script_prevChat(self, gesture):
         if not CHAT_TITLES:
@@ -315,15 +445,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             idx = (idx - 1) % len(CHAT_TITLES)
         except ValueError:
             idx = 0
-        CURRENT_CHAT[0] = CHAT_TITLES[idx]
-        CURRENT_INDEX[0] = max(0, len(CHAT_DATA[CURRENT_CHAT[0]]) - 1)
-        display = CURRENT_CHAT[0].split('::', 1)[-1]
-        ui.message(f"active chat: {display}")
+        self._switch_chat(idx)
 
-    @script(  
-        # Translators: Message to be announced during Keyboard Help  
+    @script(
         description=_("move to read next conversation"),
-        # Translators: Name of the section in "Input gestures" dialog.  
         category="messengerAccess")
     def script_nextChat(self, gesture):
         if not CHAT_TITLES:
@@ -334,10 +459,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             idx = (idx + 1) % len(CHAT_TITLES)
         except ValueError:
             idx = 0
-        CURRENT_CHAT[0] = CHAT_TITLES[idx]
-        CURRENT_INDEX[0] = max(0, len(CHAT_DATA[CURRENT_CHAT[0]]) - 1)
-        display = CURRENT_CHAT[0].split('::', 1)[-1]
-        ui.message(f"active chat: {display}")
+        self._switch_chat(idx)
 
     __gestures = {
         "kb:control+[":       "prevMessage",

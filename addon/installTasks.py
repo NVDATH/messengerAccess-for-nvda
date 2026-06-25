@@ -6,6 +6,7 @@ import wx
 
 _TM_FIREFOX_URL = "https://addons.mozilla.org/firefox/addon/tampermonkey/"
 _TM_CHROME_URL  = "https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"
+_SCRIPT_URL     = "http://localhost:48320/universal.user.js"
 
 
 class _GetExtensionDialog(wx.Dialog):
@@ -79,7 +80,27 @@ def _run_on_main(fn):
     return result[0]
 
 
+def _get_addon_folder_name():
+    # Add-on folder name matches the addon name in manifest (e.g. "messengerAccess")
+    # installTasks.py lives at: <addons_dir>/<addonName>.pendingInstall/installTasks.py
+    # The existing installed copy (if any) is at: <addons_dir>/<addonName>/
+    this_dir   = os.path.dirname(os.path.abspath(__file__))   # ...pendingInstall/
+    addons_dir = os.path.dirname(this_dir)                     # addons/
+    addon_name = os.path.basename(this_dir).replace(".pendingInstall", "")
+    existing   = os.path.join(addons_dir, addon_name)
+    return existing
+
+
+def _is_upgrade():
+    return os.path.isdir(_get_addon_folder_name())
+
+
 def onInstall() -> None:
+    if _is_upgrade():
+        _run_on_main(_show_upgrade_dialog)
+        return
+
+    # Fresh install flow
     has_tm = _run_on_main(lambda: gui.messageBox(
         "Do you already have Tampermonkey (or a compatible userscript manager) "
         "installed in your browser?",
@@ -105,6 +126,12 @@ def onInstall() -> None:
         _write_wizard_flag()
 
 
+def _show_upgrade_dialog():
+    dlg = _UpdateScriptDialog(gui.mainFrame)
+    dlg.ShowModal()
+    dlg.Destroy()
+
+
 def _write_wizard_flag():
     try:
         addon_dir = os.path.dirname(__file__)
@@ -113,3 +140,47 @@ def _write_wizard_flag():
             f.write("1")
     except Exception:
         pass
+
+
+class _UpdateScriptDialog(wx.Dialog):
+    def __init__(self, parent):
+        super().__init__(parent, title="Messenger Access — UserScript Update Required")
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        desc = wx.StaticText(
+            self, wx.ID_ANY,
+            "Messenger Access has been updated.\n\n"
+            "The UserScript in your browser also needs to be updated to work correctly.\n\n"
+            "Click \"Copy Script URL\" below, then paste it into your browser's address bar.\n"
+            "Tampermonkey will prompt you to update the script."
+        )
+        desc.Wrap(440)
+        sizer.Add(desc, 0, wx.ALL, 12)
+
+        self.btnCopy  = wx.Button(self, wx.ID_ANY, "Copy Script URL")
+        self.btnClose = wx.Button(self, wx.ID_CANCEL, "Close")
+
+        btnSizer = wx.BoxSizer(wx.HORIZONTAL)
+        btnSizer.Add(self.btnCopy,  0, wx.RIGHT, 8)
+        btnSizer.Add(self.btnClose, 0)
+        sizer.Add(btnSizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+
+        self.SetSizerAndFit(sizer)
+        self.CentreOnScreen()
+
+        self.btnCopy.Bind(wx.EVT_BUTTON, self._on_copy)
+        self.btnClose.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CANCEL))
+        self.Bind(wx.EVT_CLOSE, lambda e: self.EndModal(wx.ID_CANCEL))
+        self.btnCopy.SetFocus()
+
+    def _on_copy(self, event):
+        if wx.TheClipboard.Open():
+            wx.TheClipboard.SetData(wx.TextDataObject(_SCRIPT_URL))
+            wx.TheClipboard.Close()
+        wx.MessageBox(
+            "Script URL copied!\n\n"
+            "Paste it into your browser's address bar.\n"
+            "Tampermonkey will show an update prompt — click Install to update.",
+            "URL Copied",
+            wx.OK | wx.ICON_INFORMATION
+        )
