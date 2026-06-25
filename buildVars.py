@@ -17,7 +17,7 @@ Warning: User usage requires knowledge of userScript installation.
 
 For this add-on, we will use userScript installed on the browser to edit the display of chat messages and forward it to the add-on. You can use shortcut keys to read the message.
 Users can focus in the text field and press the control+[/] keyboard shortcut to keep the conversation flowing. No need to move focus around often.
-    """)
+    """),
     "addon_author": "NVDATH <nvdainth@gmail.com> assis by A.I.",
     "addon_url": "https://github.com/NVDATH/messengerAccess-for-nvda",
     "addon_docFileName": "readme.html",
